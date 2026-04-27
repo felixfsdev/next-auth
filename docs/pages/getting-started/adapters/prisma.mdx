@@ -15,53 +15,62 @@ import { Accordion, Accordions } from "@/components/Accordion"
 ### Installation
 
 ```bash npm2yarn
-npm install @prisma/client @prisma/extension-accelerate @auth/prisma-adapter
-npm install prisma --save-dev
-```
-
-### Environment Variables
-
-If you're using Prisma Postgres, the `DATABASE_URL` will be automatically set up during initialization. For other databases, you'll need to manually configure the `DATABASE_URL` environment variable. For more information, read the [docs](https://www.prisma.io/docs/getting-started/setup-prisma/start-from-scratch/relational-databases/connect-your-database-typescript-postgresql).
-
-```sh
-DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/DATABASE?schema=SCHEMA
+npm install @prisma/client @auth/prisma-adapter @prisma/adapter-pg dotenv pg
+npm install prisma @types/pg --save-dev
 ```
 
 ### Configuration
 
-First, initialize Prisma in your project. If you're using Prisma Postgres, run:
+First, initialize Prisma in your project.
 
 ```bash
-npx prisma init --db --output ./src/generated/prisma
+npx prisma init  --output ./src/generated/prisma
 ```
 
-This will create a Prisma Postgres database, set up your schema file, and configure the output directory for the generated Prisma Client.
+This will create `prisma/schema.prisma`, `prisma.config.ts` and a `.env` file containing a local `DATABASE_URL`. The `src/generated/prisma` output directory for the generated Prisma Client will be created when you run `prisma generate` or `prisma migrate dev` in a later step.
 
-For other databases, run:
+Next, create a database using your preferred method and replace the generated `DATABASE_URL` in your `.env` file with the `postgresql://...` connection string from the CLI output. For example, the following command creates a Prisma Postgres database:
 
 ```bash
-npx prisma init --output ./src/generated/prisma
+npx create-db
 ```
 
-Then manually configure your `DATABASE_URL` in the `.env` file.
-
-To improve performance using `Prisma ORM`, we can set up the Prisma instance to ensure only one instance is created throughout the project and then import it from any file as needed. This approach avoids recreating instances of PrismaClient every time it is used. Finally, we can import the Prisma instance from the `auth.ts` file configuration.
-
-```ts filename="prisma.ts"
-import { PrismaClient } from "../src/generated/client"
-import { withAccelerate } from "@prisma/extension-accelerate"
-
-const globalForPrisma = globalThis as unknown as { prisma: PrismaClient }
-
-export const prisma =
-  globalForPrisma.prisma || new PrismaClient().$extends(withAccelerate())
-
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma
-```
+If your `DATABASE_URL` starts with `postgres://` instead of `postgresql://`, change it to `postgresql://` to make Prisma migrations work correctly. Note that you should put the `DATABASE_URL` in the `.env` file and not in `.env.local`.
 
 <Callout type="info">
-  If you're not using Prisma Postgres with Accelerate, you can omit the
-  `withAccelerate()` extension and delete `.$extends(withAccelerate())`.
+  If you are deploying this on Vercel, you should add the environment variable
+  `DATABASE_URL` in your Vercel project settings as well.
+</Callout>
+
+Create a `prisma.ts` file with the following code:
+
+```ts filename="./prisma.ts"
+import { PrismaClient } from "@/src/generated/prisma/client"
+import { PrismaPg } from "@prisma/adapter-pg"
+const globalForPrisma = global as unknown as {
+  prisma: PrismaClient
+}
+const adapter = new PrismaPg({
+  connectionString: process.env.DATABASE_URL,
+})
+const prisma =
+  globalForPrisma.prisma ||
+  new PrismaClient({
+    adapter,
+  })
+if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma
+export default prisma
+```
+
+This file creates a Prisma Client and attaches it to the global object so that only one instance of the client is created in your application. The exported `prisma` instance can then be imported and used in your application and passed to the Prisma Adapter.
+
+If you are seeing error squiggles under `"@/src/generated/prisma/client"`, that is because we haven't generated the Prisma Client yet. You can ignore this for now and it should go away after you run `prisma generate` in a later step.
+
+<Callout type="info">
+  If you are using something else instead of Postgres (like MySQL, SQLite,
+  etc.), install the corresponding driver adapter package instead of
+  `@prisma/adapter-pg`. For more information, see [Database
+  drivers](https://www.prisma.io/docs/orm/core-concepts/supported-databases/database-drivers).
 </Callout>
 
 <Callout type="warning">
@@ -72,13 +81,15 @@ if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma
   information.
 </Callout>
 
+Update `auth.ts` to use the Prisma Adapter and the `prisma` instance you just created. Make sure to fill the `providers` array with the providers you are using.
+
 <Code>
 <Code.Next>
 
 ```ts filename="./auth.ts"
 import NextAuth from "next-auth"
+import prisma from "@/prisma"
 import { PrismaAdapter } from "@auth/prisma-adapter"
-import { prisma } from "@/prisma"
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(prisma),
@@ -139,28 +150,9 @@ app.use(
 </Code.Express>
 </Code>
 
-### Edge Compatibility
-
-Prisma has shipped edge runtime support for their client in version `5.12.0`. You can read more about it on their [edge documentation](https://www.prisma.io/docs/orm/prisma-client/deployment/edge/overview). This requires specific database drivers and therefore is only compatible with certain database types / hosting providers. Check their [list of supported drivers](https://www.prisma.io/docs/orm/prisma-client/deployment/edge/overview#which-database-drivers-are-edge-compatible) before getting started. You can check out an example Auth.js application with `next-auth` and Prisma on the edge [here](https://github.com/ndom91/authjs-prisma-edge-example).
-
-For more about edge compatibility in general, check out our [edge compatibility guide](/guides/edge-compatibility).
-
-The original database edge-runtime workaround, to split your `auth.ts` configuration into two, will be kept below.
-
-#### Old Edge Workaround
-
-At the moment, Prisma is still working on being fully compatible with edge runtimes like Vercel's. See the issue being tracked [here](https://github.com/prisma/prisma/issues/20560), and Prisma's announcement about early edge support in the `5.9.1` [changelog](https://github.com/prisma/prisma/releases/tag/5.9.0). There are two options to deal with this issue:
-
-- Use the Prisma's [Accelerate](https://pris.ly/d/accelerate) feature
-- Follow our [Edge Compatibility](/guides/edge-compatibility) page as the workaround. This uses the `jwt` session strategy and separates the `auth.ts` configuration into two files.
-
-Using Prisma with the `jwt` session strategy and `@prisma/client@5.9.1` or above doesn't require any additional modifications, other than ensuring you don't do any database queries in your proxy (or middleware in older Next.js versions).
-
-Since `@prisma/client@5.9.1`, Prisma no longer throws about being incompatible with the edge runtime at instantiation, but at query time. Therefore, it is possible to import it in files being used in your proxy as long as you do not execute any queries in your proxy.
-
 ### Schema
 
-You need to use at least Prisma `2.26.0`. Create a schema file at `prisma/schema.prisma` with the following models.
+Create a schema file at `prisma/schema.prisma` with the following models.
 
 <Accordions>
 <Accordion title="PostgreSQL">
@@ -168,7 +160,6 @@ You need to use at least Prisma `2.26.0`. Create a schema file at `prisma/schema
 ```prisma filename="prisma/schema-postgres.prisma"
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 generator client {
@@ -253,7 +244,6 @@ model Authenticator {
 ```prisma filename="prisma/schema-mysql.prisma"
 datasource db {
   provider = "mysql"
-  url      = env("DATABASE_URL")
 }
 
 generator client {
@@ -353,7 +343,6 @@ model Authenticator {
 ```prisma filename="prisma/schema-sqlite.prisma"
 datasource db {
   provider = "sqlite"
-  url      = env("DATABASE_URL")
 }
 
 generator client {
@@ -440,7 +429,6 @@ model Authenticator {
 ```prisma filename="prisma/schema-mongodb.prisma"
 datasource db {
   provider = "mongodb"
-  url      = env("DATABASE_URL")
 }
 
 generator client {
@@ -556,11 +544,13 @@ Note that you will need to specify your database connection string in the enviro
 
 ### Generate Prisma Client
 
-`prisma migrate dev` will also generate the Prisma client, but if you need to generate it again manually you can run the following command.
+Run the following command to generate the Prisma Client in the `src/generated/prisma` directory. Don't forget to add this directory to your `.gitignore` file if you have one.
 
 ```bash npm2yarn
 npm exec prisma generate
 ```
+
+That's it! You should now have the Prisma Adapter set up and ready to use in your application.
 
 ### Development Workflow
 
