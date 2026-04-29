@@ -550,6 +550,13 @@ Run the following command to generate the Prisma Client in the `src/generated/pr
 npm exec prisma generate
 ```
 
+<Callout type="info">
+  If you are deploying this on Vercel, you should update your build command to
+  run `prisma generate` before the build step. For example, you can set your
+  build command to `npm exec prisma generate && next build` if you are using
+  Next.js.
+</Callout>
+
 That's it! You should now have the Prisma Adapter set up and ready to use in your application.
 
 ### Development Workflow
